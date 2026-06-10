@@ -1,53 +1,33 @@
-import os
-import logging
-import time
 import cv2
 import numpy as np
+from TableProcessorBase import TableProcessorBase
 
 # 画像の中から表を抽出するクラス
-class TableExtractor:
-    
-    BASE_DIR = "./process_images/table_extractor/"
+class TableExtractor(TableProcessorBase):
 
-    def __init__(self, image_path):
-        self.image_path = image_path
-        self.logger = logging.getLogger(__name__)
-
-        # デバッグ用画像出力ディレクトリの作成
-        if self.logger.isEnabledFor(logging.DEBUG):
-            os.makedirs(self.BASE_DIR, exist_ok=True)
-            self.file_number = 0
-    
-    def file_open(self):
-        if not os.path.exists(self.image_path):
-            raise FileExistsError(f"ファイルが存在しません: {self.image_path}")
-        
-        self.image = cv2.imread(self.image_path)
-
-        if self.image is None:
-            raise ValueError(f"画像を読み込めません: {self.image_path}")
-            
-        self.store_process_image("original.jpg", self.image)
+    # def __init__(self, image_path):
+    #     super().__init__()
+    #     self.image_path = image_path
 
     def execute(self):
 
         # 画像ファイルの読み込み
-        self.file_open()
+        self.image = self.file_open()
+        self.store_process_image("original.jpg", self.image)
         # 時間計測開始
-        start = time.perf_counter()
+        self.start_timer()
 
         # 【ステップ１】前処理
+        # 画像サイズの縮小
+        self.image = cv2.resize(self.image, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
         # 赤と青の鉛筆でのマーキングを消去
         no_red_blue_image = self.remove_red_blue(self.image)
-        # グレースケール変換とぼかし
-        gray_image = cv2.cvtColor(no_red_blue_image, cv2.COLOR_BGR2GRAY)
-        gray_image = cv2.GaussianBlur(gray_image, (3,3), 0)
-        self.store_process_image("grayscale.jpg", gray_image)
+        # グレースケール変換
+        gray_image = self.convert_grayscale(no_red_blue_image)
         # 2値化と反転
-        _, binary_image = cv2.threshold(gray_image, 90, 255, cv2.THRESH_BINARY_INV)
-        self.store_process_image("binary.jpg", binary_image)
-        # 線の拡張
-        dilated_image = cv2.dilate(binary_image, None, iterations=5)
+        self.inverted_image = self.convrt_binary(gray_image)
+        # 線の膨張
+        dilated_image = cv2.dilate(self.inverted_image, None, iterations=5)
         self.store_process_image("dilate.jpg", dilated_image)
 
         # 【ステップ２】輪郭を見付けて最大級の長方形の輪郭を見つける
@@ -64,19 +44,18 @@ class TableExtractor:
         points = self.rectangle_points(largest_contours)
         # 生成する新しい画像サイズを求める
         new_height, new_width = self.get_new_image_size(points[0])
-        #print(f"new_heigh={new_height},new_width={new_width}")
-        # 遠近変換
-        tmp_image = self.perspective_transform(points[0], new_height, new_width)
-        # パティングの追加
-        new_image = self.add_10_percent_padding(tmp_image)
-        
+        # 透視変換
+        new_image = self.perspective_transform(points[0], new_height, new_width)
+        # 表線削除時のためパティングの追加
+        new_image = self.add_10_percent_padding(new_image)
+
         # 時間計測終了
-        end = time.perf_counter()
-        print(f"処理時間: {end - start:.6f} 秒")
+        self.end_timer()
 
         return new_image
 
     def remove_red_blue(self, image):
+
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 
         # 赤のマスク
@@ -111,7 +90,29 @@ class TableExtractor:
         self.store_process_image("remove_red_blue.jpg", noRBimage)
 
         return noRBimage
-    
+
+    def convert_grayscale(self, image):
+        # グレースケール変換
+        gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # print(f"1.={gray_image.mean()}")
+        # 局所コントラスト補正
+        clahe = cv2.createCLAHE(clipLimit=2.0,tileGridSize=(8,8))
+        gray_image = clahe.apply(gray_image)
+        # print(f"2.={gray_image.mean()}")
+        mean_val = gray_image.mean()    
+        threshold = int(mean_val * 0.5)
+        # print(f"3.={threshold}")
+        _, gray_image= cv2.threshold(gray_image, threshold, 255, cv2.THRESH_BINARY)
+        # ぼかし
+        # gray_image = cv2.GaussianBlur(gray_image, (3,3), 0)
+        self.store_process_image("grayscale.jpg", gray_image)
+        return gray_image
+
+    def convrt_binary(self, image):
+        _, binary_image = cv2.threshold(image, 90, 255, cv2.THRESH_BINARY_INV)
+        self.store_process_image("binary.jpg", binary_image)
+        return binary_image
+
     def find_contours(self, image):
         contours, _ = cv2.findContours(image, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         all_contour_image = self.image.copy()
@@ -174,7 +175,7 @@ class TableExtractor:
 
         # OpenCVの座標を扱いやすい形にしていく
         # 謎次元を削除
-        # (4, 1, 2) -> (4,1)
+        # (4, 1, 2) -> (4,2)
         pts = pts.reshape(4, 2)
 
         rect = np.zeros((4, 2), dtype="float32")
@@ -216,19 +217,14 @@ class TableExtractor:
         pts1 = np.float32(contour)
         pts2 = np.float32([[0, 0], [width, 0], [width, height], [0, height]])
         matrix = cv2.getPerspectiveTransform(pts1, pts2)
-        transformed_image = cv2.warpPerspective(self.image, matrix, (width, height))
+        transformed_image = cv2.warpPerspective(self.inverted_image, matrix, (width, height))
         self.store_process_image("perspective_corrected.jpg", transformed_image)
         return transformed_image
 
     def add_10_percent_padding(self, image):
-        image_height = self.image.shape[0]
+        image_height = image.shape[0]
         padding = int(image_height * 0.1)
-        new_image = cv2.copyMakeBorder(image, padding, padding, padding, padding, cv2.BORDER_CONSTANT, value=[255, 255, 255])
-        self.store_process_image("perspective_corrected_with_padding.jpg", new_image)
+        new_image = cv2.copyMakeBorder(image, padding, padding, padding, padding, cv2.BORDER_CONSTANT, value=[0, 0, 0])
+        self.store_process_image("added_padding.jpg", new_image)
         return new_image
-
-    def store_process_image(self, file_name, image):
-        if self.logger.isEnabledFor(logging.DEBUG):
-            cv2.imwrite(self.BASE_DIR + f"{self.file_number:02}_" + file_name, image)
-            self.file_number+=1
         
