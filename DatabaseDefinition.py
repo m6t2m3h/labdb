@@ -4,7 +4,35 @@ class DatabaseDefinition:
     DATA_BASE_DIR = "./data/"
     DATA_BASE_NAME = "blood_test"
 
-    ITEM_NAME = {
+    PATIENT_TABLE = "patient"
+    RESULT_TABLE = "result"
+
+    PATIENT_ITEM = {
+        "患者名": "patient_name",
+        "性別": "gender"
+    }
+
+    PATIENT_ITEM_REVERSE = {
+        v: k for k, v in PATIENT_ITEM.items()
+    }
+
+    RESULT_INFO = {
+        "病院名": "hospital_name",
+        "診療科": "department",
+        "担当医": "doctor",
+        "報告日": "report_date",
+        "時間": "report_time",
+        "受付日": "reception_date",
+        "年令": "age"
+    }
+
+    RESULT_INFO_REVERSE = {
+        v: k for k, v in RESULT_INFO.items()
+    }
+
+    HEADER_ITEM = PATIENT_ITEM | RESULT_INFO
+
+    RESULT_ITEM = {
         "TP": "tp" ,
         "アルブミン": "albumin" ,
         "A/G比": "ag_ratio" ,
@@ -108,3 +136,13 @@ class DatabaseDefinition:
         "糖定量ー穿刺液": "puncture_fluid_glucose" ,
         "心筋トロボニンT": "troponin_t" 
     }
+
+    RESULT_DATA = RESULT_INFO | RESULT_ITEM
+
+    RESULT_DATA_REVERSE = {
+        v: k for k, v in RESULT_DATA.items()
+    }
+
+    DB_PATIENT_ITEM = {"登録者ID": "patient_id"} | PATIENT_ITEM
+    
+    DB_RESULT_ITEM = {"検査表ID":"result_id", "登録者ID": "patient_id"} | RESULT_DATA

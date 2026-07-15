@@ -3,13 +3,10 @@ import numpy as np
 from TableProcessorBase import TableProcessorBase
 
 # 2値化されている画像の中から表の線を取り除くクラス
-class TableLinesRemover(TableProcessorBase):
+class TableLineRemover(TableProcessorBase):
 
-    def __init__(self, file_path, image):
-        super().__init__(file_path)
+    def execute(self, image):
         self.image = image
-
-    def execute(self):
         # 時間計測開始
         self.start_timer()
         # a.縦線のみ抽出
@@ -21,7 +18,7 @@ class TableLinesRemover(TableProcessorBase):
         # 表の線を膨張
         table_line_image = self.make_lines_thicker(table_line_image)
         # 元画像から表の線を引く
-        text_image = self.subtract_table_from_image(self.image, table_line_image)
+        text_image = self.remove_table_lines(self.image, table_line_image)
         # ノイズの除去
         text_image = self.remove_noise(text_image)
         # 時間計測終了
@@ -32,7 +29,7 @@ class TableLinesRemover(TableProcessorBase):
     def extract_vertical_lines(self, image):
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT,(1, image.shape[0]//50))
         vertical_image = cv2.morphologyEx(image, cv2.MORPH_OPEN, kernel, iterations=3)
-        self.store_process_image("vertica_lines.jpg", vertical_image)
+        self.store_process_image("vertical_lines.jpg", vertical_image)
         return vertical_image
 
     def extract_horizontal_lines(self, image):
@@ -52,7 +49,7 @@ class TableLinesRemover(TableProcessorBase):
         self.store_process_image("dilated.jpg", dilated_image)
         return dilated_image
 
-    def subtract_table_from_image(self, image, table):
+    def remove_table_lines(self, image, table):
         subtracted_image = cv2.subtract(image, table)
         self.store_process_image("without_lines.jpg", subtracted_image)
         return subtracted_image
@@ -60,8 +57,9 @@ class TableLinesRemover(TableProcessorBase):
     def remove_noise(self, image):
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
         denoised_image = cv2.morphologyEx(image, cv2.MORPH_CLOSE, kernel, iterations=1)
-        # モルフォロジー変換で出てきた微妙な値を再度２値化で整理する
-        _, denoised_image = cv2.threshold(denoised_image, 127, 255, cv2.THRESH_BINARY)
         self.store_process_image("noise_removed.jpg", denoised_image)
+        # モルフォロジー変換で出てきた微妙な値を再度２値化で整理する
+        _, denoised_image = cv2.threshold(denoised_image, 127, 255, cv2.THRESH_BINARY_INV)
+        self.store_process_image("inverted.jpg", denoised_image)
         return denoised_image
         

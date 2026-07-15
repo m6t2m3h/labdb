@@ -11,3 +11,4 @@ process_images/
 ocr_slices/
 data/
 data/*.db
+testdata/

@@ -2,12 +2,16 @@ import cv2
 import numpy as np
 from TableProcessorBase import TableProcessorBase
 
-# 画像の中から表を抽出するクラス
+# 参考
+# How To: Extract Table From Image In Python (OpenCV & OCR)
+# https://livefiredev.com/how-to-extract-table-from-image-in-python-opencv-ocr/
+
+# 画像の中から血液検査表と基礎情報の画像を抽出するクラス
 class TableExtractor(TableProcessorBase):
 
-    # def __init__(self, image_path):
-    #     super().__init__()
-    #     self.image_path = image_path
+    IMAGE_SCALE_FACTOR = 0.5    # 画像縮小サイズ
+    LINE_DILATE_ITERATIONS = 5  # 線検出のための膨張の処理回数
+    LINE_DETECT_PADDING = 10    # 表線検出処理のために追加するパディング
 
     def execute(self):
 
@@ -19,40 +23,49 @@ class TableExtractor(TableProcessorBase):
 
         # 【ステップ１】前処理
         # 画像サイズの縮小
-        self.image = cv2.resize(self.image, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
+        self.image = cv2.resize(self.image,
+                                None,
+                                fx=self.IMAGE_SCALE_FACTOR,
+                                fy=self.IMAGE_SCALE_FACTOR,
+                                interpolation=cv2.INTER_AREA
+                            )
         # 赤と青の鉛筆でのマーキングを消去
-        no_red_blue_image = self.remove_red_blue(self.image)
+        process_image = self.remove_red_blue(self.image)
         # グレースケール変換
-        gray_image = self.convert_grayscale(no_red_blue_image)
+        self.gray_image = self.convert_grayscale(process_image)
+        # 適用的ヒストグラム平坦化
+        process_image = self.equalize_histgram(self.gray_image)
         # 2値化と反転
-        self.inverted_image = self.convrt_binary(gray_image)
-        # 線の膨張
-        dilated_image = cv2.dilate(self.inverted_image, None, iterations=5)
-        self.store_process_image("dilate.jpg", dilated_image)
+        self.inverted_image = self.convrt_binary(process_image)
 
         # 【ステップ２】輪郭を見付けて最大級の長方形の輪郭を見つける
+        # 線の膨張
+        process_image = self.dilate_all_lines(self.inverted_image)
         # 画像内全ての輪郭を描く
-        contours = self.find_contours(dilated_image)
+        contours = self.find_contours(process_image)
         # 四角形の輪郭だけを抽出
         rectangular_contours = self.leave_only_rectangles(contours)
         # 最大級の四角形だけを抽出
         largest_contours = self.find_largest_contours(rectangular_contours)
+        # 表を元の画像から除去して基礎情報のみにする
+        patient_image = self.crop_header(self.gray_image, largest_contours)
 
-        #####一時的にリストの最初の要素(表の左側)のみ解析していく#####
         # 【ステップ３】遠近感補正
         # 四角形の頂点を求める
+        lab_image = []
         points = self.rectangle_points(largest_contours)
-        # 生成する新しい画像サイズを求める
-        new_height, new_width = self.get_new_image_size(points[0])
-        # 透視変換
-        new_image = self.perspective_transform(points[0], new_height, new_width)
-        # 表線削除時のためパティングの追加
-        new_image = self.add_10_percent_padding(new_image)
+        for point in points:
+            # 生成する新しい画像サイズを求める
+            new_height, new_width = self.get_new_image_size(point)
+            # 透視変換
+            new_image = self.perspective_transform(point, new_height, new_width)
+            # 表線削除時のためパティングの追加
+            new_image = self.add_padding(new_image)
+            lab_image.append(new_image)
 
         # 時間計測終了
         self.end_timer()
-
-        return new_image
+        return patient_image, lab_image
 
     def remove_red_blue(self, image):
 
@@ -81,7 +94,7 @@ class TableExtractor(TableProcessorBase):
         mask_blue = cv2.dilate(mask_hsv, kernel, iterations=1)
         self.store_process_image("mask_blue.jpg", mask_blue)
 
-        mask = mask_red + mask_blue
+        mask = cv2.bitwise_or(mask_red, mask_blue)
    
         # マスク部分を白で上書き
         noRBimage = image.copy()
@@ -92,31 +105,40 @@ class TableExtractor(TableProcessorBase):
         return noRBimage
 
     def convert_grayscale(self, image):
-        # グレースケール変換
         gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        # print(f"1.={gray_image.mean()}")
-        # 局所コントラスト補正
-        clahe = cv2.createCLAHE(clipLimit=2.0,tileGridSize=(8,8))
-        gray_image = clahe.apply(gray_image)
-        # print(f"2.={gray_image.mean()}")
-        mean_val = gray_image.mean()    
-        threshold = int(mean_val * 0.5)
-        # print(f"3.={threshold}")
-        _, gray_image= cv2.threshold(gray_image, threshold, 255, cv2.THRESH_BINARY)
-        # ぼかし
-        # gray_image = cv2.GaussianBlur(gray_image, (3,3), 0)
         self.store_process_image("grayscale.jpg", gray_image)
         return gray_image
+
+    def equalize_histgram(self, image):
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        image = clahe.apply(image)
+        mean_val = image.mean()    
+        threshold = int(mean_val * 0.5)
+        _, clahe_image= cv2.threshold(image, threshold, 255, cv2.THRESH_BINARY)
+        self.store_process_image("clahe.jpg", clahe_image)
+        return clahe_image
 
     def convrt_binary(self, image):
         _, binary_image = cv2.threshold(image, 90, 255, cv2.THRESH_BINARY_INV)
         self.store_process_image("binary.jpg", binary_image)
         return binary_image
-
+    
+    def dilate_all_lines(self, image):
+        dilated_image = cv2.dilate(image, None, iterations=self.LINE_DILATE_ITERATIONS)
+        self.store_process_image("dilate.jpg", dilated_image)
+        return dilated_image
+    
+    def find_extarnal_contours(self, image):
+        contours, _ = cv2.findContours(image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contour_image = self.image.copy()
+        cv2.drawContours(contour_image, contours, -1, self.COLOR_GREEN_BGR, 3)
+        self.store_process_image("ex_contour.jpg", contour_image)
+        return contours    
+    
     def find_contours(self, image):
         contours, _ = cv2.findContours(image, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         all_contour_image = self.image.copy()
-        cv2.drawContours(all_contour_image, contours, -1, (0, 255, 0), 3)
+        cv2.drawContours(all_contour_image, contours, -1, self.COLOR_GREEN_BGR, 3)
         self.store_process_image("all_contour.jpg", all_contour_image)
         return contours        
 
@@ -129,7 +151,7 @@ class TableExtractor(TableProcessorBase):
                 rectangular_contours.append(approx)
         
         rectangle_contour_image = self.image.copy()
-        cv2.drawContours(rectangle_contour_image, rectangular_contours, -1, (0, 255, 0), 3)
+        cv2.drawContours(rectangle_contour_image, rectangular_contours, -1, self.COLOR_GREEN_BGR, 3)
         self.store_process_image("rectangle_contour.jpg", rectangle_contour_image)
         return rectangular_contours
 
@@ -151,10 +173,23 @@ class TableExtractor(TableProcessorBase):
         ]
 
         largest_contours_image = self.image.copy()
-        cv2.drawContours(largest_contours_image, largest_contours, -1, (0, 255, 0), 3)
+        cv2.drawContours(largest_contours_image, largest_contours, -1, self.COLOR_GREEN_BGR, 3)
         self.store_process_image("largest_contours.jpg", largest_contours_image)
         return largest_contours
 
+    def crop_header(self, image, contours):
+        if not contours:
+            return image
+        # 表輪郭の上辺のうち最小値で画像を切り取る
+        top = min(
+            cv2.boundingRect(contour)[1]
+            for contour in contours
+        )
+        height, width = image.shape[:2]
+        crop = image[:top, :width]
+        self.store_process_image("header.jpg", crop)
+        return crop
+    
     def rectangle_points(self, contours):
 
         coordinate_set = []
@@ -166,7 +201,7 @@ class TableExtractor(TableProcessorBase):
         for coordinate in coordinate_set:
             for point in coordinate:
                 point_coordinate = (int(point[0]), int(point[1]))
-                plotted_image = cv2.circle(plotted_image, point_coordinate, 10, (0, 0, 255), -1)
+                plotted_image = cv2.circle(plotted_image, point_coordinate, 10, self.COLOR_RED_BGR, -1)
         
         self.store_process_image("corner_points_plotted.jpg", plotted_image)
         return coordinate_set
@@ -221,10 +256,16 @@ class TableExtractor(TableProcessorBase):
         self.store_process_image("perspective_corrected.jpg", transformed_image)
         return transformed_image
 
-    def add_10_percent_padding(self, image):
-        image_height = image.shape[0]
-        padding = int(image_height * 0.1)
-        new_image = cv2.copyMakeBorder(image, padding, padding, padding, padding, cv2.BORDER_CONSTANT, value=[0, 0, 0])
+    def add_padding(self, image):
+        padding = self.LINE_DETECT_PADDING
+        new_image = cv2.copyMakeBorder(image,
+                                    padding,
+                                    padding,
+                                    padding,
+                                    padding,
+                                    cv2.BORDER_CONSTANT,
+                                    value=[0, 0, 0]
+                                )
         self.store_process_image("added_padding.jpg", new_image)
         return new_image
         
